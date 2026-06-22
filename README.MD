@@ -2,7 +2,7 @@
 
 Sys-env can be used to prevent mods (or similar things) from being loaded in SysNAND / EmuNAND (this is configurable). <br>
 
-## Usecases:
+## Usecases
 The most notable example is themes: <br>
  - Theme patches usually need to match the exact firmware version
    - If SysNand and EmuNand are on different firmware, you end up with a crash
@@ -11,7 +11,7 @@ The most notable example is themes: <br>
 
 What this basically does: during boot, it appends .bak to the end of matching directories so they won’t be loaded. <br>
 
-## Usage:
+## Usage
 There is no overlay due to my hatred of writing ui, so you have to configure it via the config. <br>
 This can be done very easily though: <br>
 Edit ``/config/sys-env/config.ini`` and set it up in the following way: <br>
