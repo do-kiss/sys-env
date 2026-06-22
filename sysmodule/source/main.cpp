@@ -53,7 +53,7 @@ extern "C" {
 bool IsEmuNand() {
     splInitialize();
     u64 out;
-    splGetConfig((SplConfigItem)65007, &out);
+    splGetConfig((SplConfigItem) 65007, &out);
     splExit();
     return (out != 0);
 }
