@@ -14,12 +14,6 @@
 	"filesystem_access": {
 		"permissions": "0xFFFFFFFFFFFFFFFF"
 	},
-	"service_access": [
-		"*"
-	],
-	"service_host": [
-		"sys:clk"
-	],
 	"kernel_capabilities": [
 		{
 			"type": "kernel_flags",

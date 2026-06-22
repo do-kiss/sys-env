@@ -44,7 +44,7 @@ namespace fs {
         dirent *entry;
 
         while ((entry = readdir(dir)) != nullptr) {
-            if (entry->d_type != DT_DIR) ^{
+            if (entry->d_type != DT_DIR) {
                 continue;
             }
 
