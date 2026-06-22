@@ -41,5 +41,5 @@ For instance this config will block themes on ``SysNand``. <br>
 [EmuNand]
 ```
 
-## Thanks to:
+## Thanks to
  - Arcdelta for motivating me to actually finish this lmao.
