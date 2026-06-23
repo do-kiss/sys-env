@@ -5,8 +5,8 @@
 constexpr u32 SysEnvModule = 0x42A;
 
 enum SysEnvResult {
-    SysEnvResult_EmptyConfig = 1,
-    SysEnvResult_ConfigNotFound = 0,
+    SysEnvResult_EmptyConfig = 0,
+    SysEnvResult_ConfigNotFound,
     SysEnvResult_HeaderMissing,
     SysEnvResult_CreateDirectoryFailed,
     SysEnvResult_CreateFileFailed,
