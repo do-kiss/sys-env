@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <cstdarg>
 #include "result.hpp"
+#include "fs.hpp"
 
 namespace fs {
 
@@ -36,7 +37,22 @@ namespace fs {
         return str.compare(str.length() - suffix.length(), suffix.length(), suffix) == 0;
     }
 
-    Result EditContent(std::vector<std::string> &matchList, std::string &env, std::string &del) {
+    bool CheckVersion(u32 currentVer, const ProgramEntry &entry) {
+        if (!entry.hasVersionCheck) {
+            return true;
+        }
+
+        switch (entry.op) {
+            case OP_EQ: return currentVer == entry.version;
+            case OP_GE: return currentVer >= entry.version;
+            case OP_LE: return currentVer <= entry.version;
+            case OP_GT: return currentVer >  entry.version;
+            case OP_LT: return currentVer <  entry.version;
+            default:    return false;
+        }
+    }
+
+    Result EditContent(std::vector<ProgramEntry> &matchList, std::string &env, std::string &del, u32 currentVer) {
         DIR *dir = opendir(CONTENTS);
         if (!dir) {
             return SYSENV_RC(SysEnvResult_OpenContentsFailed);
@@ -60,11 +76,40 @@ namespace fs {
                 modified.erase(modified.length() - del.length());
             }
 
-            bool inList = std::find(matchList.begin(), matchList.end(), name) != matchList.end() || std::find(matchList.begin(), matchList.end(), modified) != matchList.end();
+            // 查找匹配的 ProgramEntry
+            // 同时尝试去掉本侧环境后缀再匹配，以恢复已被阻止的目录
+            std::string matchName = modified;
+            if (EndsWith(matchName, env)) {
+                matchName.erase(matchName.length() - env.length());
+            }
 
-            if (inList) {
-                if (!EndsWith(modified, env)) {
-                    modified += env;
+            ProgramEntry *matched = nullptr;
+            for (auto &pe : matchList) {
+                if (name == pe.id || modified == pe.id || matchName == pe.id) {
+                    matched = &pe;
+                    break;
+                }
+            }
+
+            if (matched != nullptr) {
+                bool shouldBlock;
+                if (matched->hasVersionCheck) {
+                    // 有版本条件：固件不符合条件时才阻止
+                    shouldBlock = !CheckVersion(currentVer, *matched);
+                } else {
+                    // 无版本条件：保持原有行为，始终阻止
+                    shouldBlock = true;
+                }
+
+                if (shouldBlock) {
+                    if (!EndsWith(modified, env)) {
+                        modified += env;
+                    }
+                } else {
+                    // 不应阻止：去掉环境后缀以恢复加载
+                    if (EndsWith(modified, env)) {
+                        modified.erase(modified.length() - env.length());
+                    }
                 }
             }
 
@@ -96,7 +141,88 @@ namespace fs {
         return SYSENV_RC(SysEnvResult_HeaderMissing);
     }
 
-    void ReadConfigEntries(std::ifstream &file, std::vector<std::string> &entries) {
+    // 解析一行中的版本条件部分，格式: " = >=16.0.0" 或 " = 16.0.0"
+    Result ParseVersionCondition(const std::string &condition, ProgramEntry &entry) {
+        std::string cond = condition;
+
+        // 去掉前导空格
+        size_t pos = 0;
+        while (pos < cond.size() && cond[pos] == ' ') {
+            pos++;
+        }
+        cond = cond.substr(pos);
+
+        if (cond.empty()) {
+            return SYSENV_RC(SysEnvResult_InvalidVersionFormat);
+        }
+
+        // 检测运算符
+        u8 op;
+        size_t verStart;
+        if (cond.compare(0, 2, ">=") == 0) {
+            op = OP_GE;
+            verStart = 2;
+        } else if (cond.compare(0, 2, "<=") == 0) {
+            op = OP_LE;
+            verStart = 2;
+        } else if (cond[0] == '>') {
+            op = OP_GT;
+            verStart = 1;
+        } else if (cond[0] == '<') {
+            op = OP_LT;
+            verStart = 1;
+        } else if (cond[0] == '=') {
+            op = OP_EQ;
+            verStart = 1;
+        } else {
+            // 无运算符，默认精确匹配（兼容 "16.0.0" 直接写的情况）
+            op = OP_EQ;
+            verStart = 0;
+        }
+
+        std::string verStr = cond.substr(verStart);
+        // 去掉版本号前的空格
+        pos = 0;
+        while (pos < verStr.size() && verStr[pos] == ' ') {
+            pos++;
+        }
+        verStr = verStr.substr(pos);
+
+        // 解析 MAJOR.MINOR.MICRO
+        u32 major = 0, minor = 0, micro = 0;
+        int dots = 0;
+        std::string part;
+        for (char c : verStr) {
+            if (c >= '0' && c <= '9') {
+                part += c;
+            } else if (c == '.') {
+                if (dots == 0) {
+                    major = std::stoul(part);
+                } else if (dots == 1) {
+                    minor = std::stoul(part);
+                }
+                part.clear();
+                dots++;
+            } else {
+                return SYSENV_RC(SysEnvResult_InvalidVersionFormat);
+            }
+        }
+        if (!part.empty()) {
+            micro = std::stoul(part);
+        }
+
+        if (dots > 2) {
+            return SYSENV_RC(SysEnvResult_InvalidVersionFormat);
+        }
+
+        entry.hasVersionCheck = true;
+        entry.op = op;
+        entry.version = MAKEHOSVERSION(major, minor, micro);
+
+        R_SUCCEED();
+    }
+
+    void ReadConfigEntries(std::ifstream &file, std::vector<ProgramEntry> &entries) {
         std::string line;
         while (std::getline(file, line)) {
             if (!line.empty() && line.back() == '\r') {
@@ -111,7 +237,34 @@ namespace fs {
                 continue;
             }
 
-            entries.push_back(line);
+            ProgramEntry entry;
+            entry.hasVersionCheck = false;
+            entry.op = OP_EQ;
+            entry.version = 0;
+
+            // 查找 '=' 分隔符，拆分程序 ID 和版本条件
+            size_t eqPos = line.find('=');
+            if (eqPos != std::string::npos) {
+                entry.id = line.substr(0, eqPos);
+                // 去掉程序 ID 尾部空格
+                while (!entry.id.empty() && entry.id.back() == ' ') {
+                    entry.id.pop_back();
+                }
+
+                std::string cond = line.substr(eqPos + 1);
+                Result rc = ParseVersionCondition(cond, entry);
+                if (R_FAILED(rc)) {
+                    // 解析失败：跳过此行，记录日志
+                    Log("Failed to parse version condition: %s", line.c_str());
+                    continue;
+                }
+            } else {
+                entry.id = line;
+            }
+
+            if (!entry.id.empty()) {
+                entries.push_back(entry);
+            }
         }
     }
 
@@ -141,7 +294,7 @@ namespace fs {
         return SYSENV_RC(SysEnvResult_EmptyConfig);
     }
 
-    Result ParseConfig(std::vector<std::string> &entries, bool emuNand) {
+    Result ParseConfig(std::vector<ProgramEntry> &entries, bool emuNand) {
         R_TRY(EnsureConfigExists());
 
         std::ifstream file(PATH);
